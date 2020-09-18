@@ -2,7 +2,7 @@
 <launch>
 
     <arg name="params_file" />
-    <arg name="output" default="screen" />
+    <arg name="output" default="log" />
 
     <node name="move_base"
           pkg="move_base"

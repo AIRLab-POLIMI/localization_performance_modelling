@@ -1,6 +1,6 @@
-odom_frame_id: "odom_realistic"
-base_frame_id: "base_footprint_realistic"
-global_frame_id: "map"
+odom_frame_id: odom_realistic
+base_frame_id: base_footprint_realistic
+global_frame_id: map
 tf_broadcast: true
 gui_publish_rate: -1.0
 save_pose_rate: -1.0

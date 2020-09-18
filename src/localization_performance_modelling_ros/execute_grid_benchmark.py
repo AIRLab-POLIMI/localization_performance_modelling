@@ -23,7 +23,7 @@ if __name__ == '__main__':
     parser.add_argument('-c', dest='grid_benchmark_configuration',
                         help='Yaml file with the configuration of the benchmark.',
                         type=str,
-                        default="~/w/catkin_ws/src/localization_performance_modelling/config/benchmark_configurations/localization_grid_benchmark_1.yaml",
+                        default="~/w/catkin_ws/src/localization_performance_modelling/config/benchmark_configurations/localization_grid_benchmark_amcl_with_ideal_map.yaml",
                         required=False)
 
     parser.add_argument('-r', dest='base_run_folder',
@@ -38,7 +38,12 @@ if __name__ == '__main__':
                         default=1,
                         required=False)
 
-    parser.add_argument('-g', '--headless', dest='headless',
+    parser.add_argument('--no-shuffle', dest='no_shuffle',
+                        help='When set the order of the combinations is not randomized.',
+                        action='store_true',
+                        required=False)
+
+    parser.add_argument('--gui', dest='gui',
                         help='When set the components are run with no GUI.',
                         action='store_true',
                         required=False)
@@ -58,5 +63,6 @@ if __name__ == '__main__':
                            environment_folders=environment_folders,
                            base_run_folder=base_run_folder,
                            num_runs=args.num_runs,
-                           headless=args.headless,
+                           shuffle=not args.no_shuffle,
+                           headless=not args.gui,
                            show_ros_info=args.show_ros_info)

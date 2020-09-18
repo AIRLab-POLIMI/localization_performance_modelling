@@ -7,6 +7,7 @@ import os
 import shutil
 import traceback
 
+import rospy
 import yaml
 from xml.etree import ElementTree as et
 import time
@@ -32,7 +33,7 @@ class BenchmarkRun(object):
 
         # environment parameters
         self.environment_folder = environment_folder
-        self.map_info_file_path = path.join(environment_folder, "data", "map.yaml")
+        self.ground_truth_map_info_path = path.join(environment_folder, "data", "map.yaml")
         self.gazebo_model_path_env_var = ":".join(map(
             lambda p: path.expanduser(p),
             self.benchmark_configuration['gazebo_model_path_env_var'] + [path.dirname(path.abspath(self.environment_folder)), self.run_output_folder]
@@ -45,6 +46,16 @@ class BenchmarkRun(object):
         laser_scan_max_range = self.run_parameters['laser_scan_max_range']
         laser_scan_fov_deg = self.run_parameters['laser_scan_fov_deg']
         laser_scan_fov_rad = laser_scan_fov_deg*np.pi/180
+        map_resolution = self.run_parameters['map_resolution']
+        self.localization_node = self.run_parameters['localization_node']
+        slam_params_folder_name = "res_{res}_fov_{fov}_max_range_{max_range}".format(res=map_resolution, fov=laser_scan_fov_deg, max_range=60.0)
+        self.slam_toolbox_posegraph_path = path.join(environment_folder, "data", "realistic_map", slam_params_folder_name, "pose_graph")
+        if self.run_parameters['map_source'] == 'ideal_map':
+            self.amcl_map_info_path = path.join(environment_folder, "data", "map.yaml")
+        elif self.run_parameters['map_source'] == 'slam_toolbox_map':
+            self.amcl_map_info_path = path.join(environment_folder, "data", "realistic_map", slam_params_folder_name, "map.yaml")
+        else:
+            raise ValueError()
 
         # run variables
         self.aborted = False
@@ -60,6 +71,7 @@ class BenchmarkRun(object):
         components_configurations_folder = path.expanduser(self.benchmark_configuration['components_configurations_folder'])
         original_supervisor_configuration_path = path.join(components_configurations_folder, self.benchmark_configuration['components_configuration']['supervisor'])
         original_amcl_configuration_path = path.join(components_configurations_folder, self.benchmark_configuration['components_configuration']['amcl'])
+        original_slam_toolbox_configuration_path = path.join(components_configurations_folder, self.benchmark_configuration['components_configuration']['slam_toolbox'])
         original_move_base_configuration_path = path.join(components_configurations_folder, self.benchmark_configuration['components_configuration']['move_base'])
         self.original_rviz_configuration_path = path.join(components_configurations_folder, self.benchmark_configuration['components_configuration']['rviz'])
         original_gazebo_world_model_path = path.join(environment_folder, "gazebo", "gazebo_environment.model")
@@ -70,6 +82,7 @@ class BenchmarkRun(object):
         # components configuration relative paths
         supervisor_configuration_relative_path = path.join("components_configuration", self.benchmark_configuration['components_configuration']['supervisor'])
         amcl_configuration_relative_path = path.join("components_configuration", self.benchmark_configuration['components_configuration']['amcl'])
+        slam_toolbox_configuration_relative_path = path.join("components_configuration", self.benchmark_configuration['components_configuration']['slam_toolbox'])
         move_base_configuration_relative_path = path.join("components_configuration", self.benchmark_configuration['components_configuration']['move_base'])
         gazebo_world_model_relative_path = path.join("components_configuration", "gazebo", "gazebo_environment.model")
         gazebo_robot_model_config_relative_path = path.join("components_configuration", "gazebo", "robot", "model.config")
@@ -80,6 +93,7 @@ class BenchmarkRun(object):
         # components configuration paths in run folder
         self.supervisor_configuration_path = path.join(self.run_output_folder, supervisor_configuration_relative_path)
         self.amcl_configuration_path = path.join(self.run_output_folder, amcl_configuration_relative_path)
+        self.slam_toolbox_configuration_path = path.join(self.run_output_folder, slam_toolbox_configuration_relative_path)
         self.move_base_configuration_path = path.join(self.run_output_folder, move_base_configuration_relative_path)
         self.gazebo_world_model_path = path.join(self.run_output_folder, gazebo_world_model_relative_path)
         gazebo_robot_model_config_path = path.join(self.run_output_folder, gazebo_robot_model_config_relative_path)
@@ -92,29 +106,47 @@ class BenchmarkRun(object):
             supervisor_configuration = yaml.load(supervisor_configuration_file)
         supervisor_configuration['run_output_folder'] = self.run_output_folder
         supervisor_configuration['pid_father'] = os.getpid()
-        supervisor_configuration['ground_truth_map_info_path'] = self.map_info_file_path
+        supervisor_configuration['ground_truth_map_info_path'] = self.ground_truth_map_info_path
         if not path.exists(path.dirname(self.supervisor_configuration_path)):
             os.makedirs(path.dirname(self.supervisor_configuration_path))
         with open(self.supervisor_configuration_path, 'w') as supervisor_configuration_file:
             yaml.dump(supervisor_configuration, supervisor_configuration_file, default_flow_style=False)
 
-        # copy the configuration of amcl to the run folder and update its parameters
-        with open(original_amcl_configuration_path) as original_amcl_configuration_file:
-            amcl_configuration = yaml.load(original_amcl_configuration_file)
-        amcl_configuration['alpha1'] = beta_1**2
-        amcl_configuration['alpha2'] = beta_2**2
-        amcl_configuration['alpha3'] = beta_3**2
-        amcl_configuration['alpha4'] = beta_4**2
-        # amcl_configuration['laser_max_range'] = laser_scan_max_range
-        if not path.exists(path.dirname(self.amcl_configuration_path)):
-            os.makedirs(path.dirname(self.amcl_configuration_path))
-        with open(self.amcl_configuration_path, 'w') as amcl_configuration_file:
-            yaml.dump(amcl_configuration, amcl_configuration_file, default_flow_style=False)
+        if self.localization_node == 'amcl':
+            # copy the configuration of amcl to the run folder and update its parameters
+            with open(original_amcl_configuration_path) as original_amcl_configuration_file:
+                amcl_configuration = yaml.load(original_amcl_configuration_file)
+            amcl_configuration['alpha1'] = beta_1**2
+            amcl_configuration['alpha2'] = beta_2**2
+            amcl_configuration['alpha3'] = beta_3**2
+            amcl_configuration['alpha4'] = beta_4**2
+            # amcl_configuration['laser_max_range'] = laser_scan_max_range
+            if not path.exists(path.dirname(self.amcl_configuration_path)):
+                os.makedirs(path.dirname(self.amcl_configuration_path))
+            with open(self.amcl_configuration_path, 'w') as amcl_configuration_file:
+                yaml.dump(amcl_configuration, amcl_configuration_file, default_flow_style=False)
 
-        # copy the configuration of move_base to the run folder
-        if not path.exists(path.dirname(self.move_base_configuration_path)):
-            os.makedirs(path.dirname(self.move_base_configuration_path))
-        shutil.copyfile(original_move_base_configuration_path, self.move_base_configuration_path)
+            # copy the configuration of move_base to the run folder
+            if not path.exists(path.dirname(self.move_base_configuration_path)):
+                os.makedirs(path.dirname(self.move_base_configuration_path))
+            shutil.copyfile(original_move_base_configuration_path, self.move_base_configuration_path)
+        elif self.localization_node == 'slam_toolbox':
+            # copy the configuration of slam_toolbox to the run folder and update its parameters
+            with open(original_slam_toolbox_configuration_path) as original_slam_toolbox_configuration_file:
+                slam_toolbox_configuration = yaml.load(original_slam_toolbox_configuration_file)
+            slam_toolbox_configuration['map_file_name'] = self.slam_toolbox_posegraph_path
+            slam_toolbox_configuration['max_laser_range'] = laser_scan_max_range
+            if not path.exists(path.dirname(self.slam_toolbox_configuration_path)):
+                os.makedirs(path.dirname(self.slam_toolbox_configuration_path))
+            with open(self.slam_toolbox_configuration_path, 'w') as slam_toolbox_configuration_file:
+                yaml.dump(slam_toolbox_configuration, slam_toolbox_configuration_file, default_flow_style=False)
+
+            # copy the configuration of move_base to the run folder
+            if not path.exists(path.dirname(self.move_base_configuration_path)):
+                os.makedirs(path.dirname(self.move_base_configuration_path))
+            shutil.copyfile(original_move_base_configuration_path, self.move_base_configuration_path)
+        else:
+            raise ValueError()
 
         # copy the configuration of the gazebo world model to the run folder and update its parameters
         gazebo_original_world_model_tree = et.parse(original_gazebo_world_model_path)
@@ -178,13 +210,12 @@ class BenchmarkRun(object):
 
         # write run info to file
         run_info_dict = dict()
-        run_info_dict["run_id"] = self.run_id
-        run_info_dict["run_folder"] = self.run_output_folder
-        run_info_dict["environment_folder"] = environment_folder
-        run_info_dict["run_parameters"] = self.run_parameters
-        run_info_dict["local_components_configuration"] = {
+        run_info_dict['run_id'] = self.run_id
+        run_info_dict['run_folder'] = self.run_output_folder
+        run_info_dict['environment_folder'] = environment_folder
+        run_info_dict['run_parameters'] = self.run_parameters
+        run_info_dict['local_components_configuration'] = {
             'supervisor': supervisor_configuration_relative_path,
-            'amcl': amcl_configuration_relative_path,
             'move_base': move_base_configuration_relative_path,
             'gazebo_world_model': gazebo_world_model_relative_path,
             'gazebo_robot_model_sdf': gazebo_robot_model_sdf_relative_path,
@@ -192,6 +223,13 @@ class BenchmarkRun(object):
             'robot_gt_urdf': robot_gt_urdf_relative_path,
             'robot_realistic_urdf': robot_realistic_urdf_relative_path,
         }
+
+        if self.localization_node == 'amcl':
+            run_info_dict['local_components_configuration']['amcl'] = amcl_configuration_relative_path
+        elif self.localization_node == 'slam_toolbox':
+            run_info_dict['local_components_configuration']['slam_toolbox'] = slam_toolbox_configuration_relative_path
+        else:
+            raise ValueError()
 
         with open(run_info_file_path, 'w') as run_info_file:
             yaml.dump(run_info_dict, run_info_file, default_flow_style=False)
@@ -219,56 +257,84 @@ class BenchmarkRun(object):
             # TODO 'rviz_config_file': self.original_rviz_configuration_path,
             'headless': self.headless,
         }
+        ground_truth_map_server_params = {
+            'map': self.ground_truth_map_info_path,
+        }
         environment_params = {
             'world_model_file': self.gazebo_world_model_path,
             'robot_gt_urdf_file': self.robot_gt_urdf_path,
             'robot_realistic_urdf_file': self.robot_realistic_urdf_path,
             'headless': True,
         }
-        localization_params = {
-            'params_file': self.amcl_configuration_path,
-            'map': self.map_info_file_path,
-        }
+        if self.localization_node == 'amcl':
+            localization_params = {
+                'params_file': self.amcl_configuration_path,
+                'map': self.amcl_map_info_path,
+            }
+        elif self.localization_node == 'slam_toolbox':
+            localization_params = {
+                'params_file': self.slam_toolbox_configuration_path,
+            }
+        else:
+            raise ValueError()
         navigation_params = {
             'params_file': self.move_base_configuration_path,
         }
         supervisor_params = {
             'params_file': self.supervisor_configuration_path,
         }
+        recorder_benchmark_data_params = {
+            'bag_file_path': path.join(self.run_output_folder, "benchmark_data.bag"),
+            'topics': "/amcl_pose /base_footprint_gt /cmd_vel /initialpose /map_gt /map_gt_metadata /map_gt_updates /map /map_metadata /map_updates /odom /particlecloud /rosout /rosout_agg /scan /scan_gt /tf /tf_static /traversal_path",
+        }
 
         # declare components
         roscore = Component('roscore', 'localization_performance_modelling', 'roscore.launch')
         environment = Component('gazebo', 'localization_performance_modelling', 'gazebo.launch', environment_params)
         rviz = Component('rviz', 'localization_performance_modelling', 'rviz.launch', rviz_params)
-        # recorder = Component('recorder', 'localization_performance_modelling', 'rosbag_recorder.launch', recorder_params)
-        localization = Component('amcl', 'localization_performance_modelling', 'amcl.launch', localization_params)
+        recorder_benchmark_data = Component('recorder_sensor_data', 'localization_performance_modelling', 'rosbag_recorder.launch', recorder_benchmark_data_params)
+        if self.localization_node == 'amcl':
+            localization = Component('amcl', 'localization_performance_modelling', 'amcl.launch', localization_params)
+        elif self.localization_node == 'slam_toolbox':
+            localization = Component('slam_toolbox', 'localization_performance_modelling', 'slam_toolbox.launch', localization_params)
+        else:
+            raise ValueError()
+        ground_truth_map_server = Component('ground_truth_map_server', 'localization_performance_modelling', 'ground_truth_map_server.launch', ground_truth_map_server_params)
         navigation = Component('move_base', 'localization_performance_modelling', 'move_base.launch', navigation_params)
-        # navigation = Component('move_base', 'localization_performance_modelling', 'move_base_tb3.launch')
         supervisor = Component('supervisor', 'localization_performance_modelling', 'localization_benchmark_supervisor.launch', supervisor_params)
 
         # set gazebo's environment variables
         os.environ['GAZEBO_MODEL_PATH'] = self.gazebo_model_path_env_var
         os.environ['GAZEBO_PLUGIN_PATH'] = self.gazebo_plugin_path_env_var
 
-        # launch components
+        # launch roscore and setup a node to monitor ros
         roscore.launch()
+        rospy.init_node("benchmark_monitor", anonymous=True)
+
+        # launch components
         environment.launch()
         rviz.launch()
-        # recorder.launch()
+        recorder_benchmark_data.launch()
         localization.launch()
+        ground_truth_map_server.launch()
         navigation.launch()
         supervisor.launch()
 
         # launch components and wait for the supervisor to finish
         self.log(event="waiting_supervisor_finish")
         supervisor.wait_to_finish()
-        # localization.wait_to_finish()
         self.log(event="supervisor_shutdown")
 
+        # check if the rosnode is still ok, otherwise the ros infrastructure has been shutdown and the benchmark is aborted
+        if rospy.is_shutdown():
+            print_error("execute_run: supervisor finished by ros_shutdown")
+            self.aborted = True
+
         # shut down components
+        ground_truth_map_server.shutdown()
         navigation.shutdown()
         localization.shutdown()
-        # recorder.shutdown()
+        recorder_benchmark_data.shutdown()
         rviz.shutdown()
         environment.shutdown()
         roscore.shutdown()
@@ -278,7 +344,7 @@ class BenchmarkRun(object):
         # noinspection PyBroadException
         try:
             self.log(event="start_compute_metrics")
-            # compute_metrics(self.run_output_folder)
+            compute_metrics(self.run_output_folder)
         except:
             print_error("failed metrics computation")
             print_error(traceback.format_exc())

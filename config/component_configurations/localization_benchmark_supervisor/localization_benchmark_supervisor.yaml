@@ -2,7 +2,7 @@
 initial_pose_std_xy: 0.2
 initial_pose_std_theta: 0.2617
 goal_tolerance: 0.4
-run_timeout: 3000.0
+run_timeout: 7200.0
 waypoint_timeout: 600
 ps_snapshot_period: 10.0
 write_estimated_poses_period: 0.1
@@ -10,15 +10,9 @@ robot_radius: 0.2
 
 # topic names
 scan_topic: /scan
+amcl_particles_topic: /particlecloud
 estimated_pose_correction_topic: /amcl_pose
-ground_truth_pose_topic: /ground_truth/base_footprint/odom
-initial_pose_topic: /initialpose
-
-# service names
-pause_physics_service: /gazebo/pause_physics
-unpause_physics_service: /gazebo/unpause_physics
-set_entity_state_service: /gazebo/set_model_state
-global_localization_service: /global_localization
+ground_truth_pose_topic: /base_footprint_gt
 
 # action names
 navigate_to_pose_action: /move_base
